@@ -13,7 +13,7 @@ from detectphoneUI import Ui_Frame
 from PyQt5.QtGui import QPixmap
 from PIL.ImageQt import ImageQt
 from PIL import Image, ImageDraw
-from PyQt5 import QtWidgets, QtGui
+from PyQt5 import QtWidgets, QtGui, QtCore
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 
 
@@ -25,7 +25,22 @@ class PreparationThread(QThread):
         super(PreparationThread, self).__init__()
 
     def run(self):
+        import redis
+        import serial.tools.list_ports
+        # start powermanager
+        self.progess.emit("Prepare Hardware...")        
+        r = redis.Redis(decode_responses=True)
+        x = r.get('lifter.serialnumber')
         ok = True
+        lifter_devicename = None
+        if bool(x):
+            for p in serial.tools.list_ports.comports():
+                if bool(p.serial_number):
+                    if p.serial_number == x:
+                        lifter_devicename = p.device
+        else:
+            ok = False
+        
         # start powermanager
         self.progess.emit("Prepare Hardware...")
         time.sleep(1)
@@ -33,7 +48,7 @@ class PreparationThread(QThread):
         ahome = os.getenv('ATHENAHOME', '/opt/futuredial/athena')
         fn = os.path.join(ahome, 'powermanager')
         if os.path.exists(fn):
-            p = subprocess.Popen([fn], cwd=ahome)       
+            p = subprocess.Popen([fn, '-lifter', lifter_devicename], cwd=athena_home)        
         time.sleep(3)
         self.progess.emit("Turn LEDs...")
         # power off camera
@@ -228,13 +243,22 @@ class DetectPhoneWidget(QtWidgets.QWidget, Ui_Frame):
         self.current_frame_lock=threading.Lock()
         self.pushButtonTest.clicked.connect(self.testthread)
 
-    def testthread(self):
-        self.current_frame_lock.acquire()
-        if self.current_frame:
-            now = datetime.now() # current date and time
-            self.current_frame.save(now.strftime("%Y%m%d-%H%M%S")+".jpg")
-        self.current_frame_lock.release()
+    @QtCore.pyqtSlot()
+    def on_finished(self):
+        self.start_camera()
+        print('thread finished')
 
+    def testthread(self):
+        # self.current_frame_lock.acquire()
+        # if self.current_frame:
+        #     now = datetime.now() # current date and time
+        #     self.current_frame.save(now.strftime("%Y%m%d-%H%M%S")+".jpg")
+        # self.current_frame_lock.release()
+        self.stop_camera()
+        self.thread = CameraWorker()
+        self.thread.start_takephoto(datetime.now().strftime("%Y%m%d-%H%M%S")+".jpg", 0)
+        self.thread.finished.connect(self.on_finished)
+        
     def exit_cliecked(self):
         self.close()
         pass
@@ -261,7 +285,8 @@ class DetectPhoneWidget(QtWidgets.QWidget, Ui_Frame):
         if self.thread is not None:
             try:
                 self.thread.stop_preview()
-                self.thread.join()
+                # self.thread.join()
+                time.sleep(0.5)
             except:
                 pass
 
